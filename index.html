@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>갯벌 한 뼘 · 맛조개 실험실</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="vendor/three.min.js"></script>
+  <script defer src="audio.js"></script>
+  <script defer src="hand.js"></script>
+  <script defer src="burrow-search.js"></script>
+  <script defer src="scene.js"></script>
+</head>
+<body>
+  <main id="stage" aria-label="근접 시점의 3D 갯벌과 맛조개"></main>
+  <header>
+    <div class="eyebrow"><span class="dot"></span> RAZOR CLAM SANDBOX <span class="phase">PHASE 17</span></div>
+    <h1>갯벌 한 뼘</h1>
+    <p>작은 구멍 앞에서, 잠깐.</p>
+  </header>
+  <button id="toggle" aria-expanded="true" aria-controls="panel">시점 조절 <span>↗</span></button>
+  <aside id="panel" aria-label="시점과 맛조개 조절">
+    <div class="panel-heading"><span>09 / 다른 맛조개들</span><span class="live">3D</span></div>
+    <h2>한 마리만 더 잡아 보세요.</h2>
+    <p class="description">구멍 찾기 → 소금통 들기 → 구멍 위에서 누른 채 뿌리기 → 맛조개 몸통 클릭 → 누른 채 위로 드래그</p>
+    <button id="salt-tool" class="reaction-button">소금통 들기</button>
+    <div class="hand-state" id="salt-state" role="status">구멍에 소금 0 / 12 · 주변 소금 0알</div>
+    <div class="hand-state clam-kind" id="clam-kind" role="status">맛조개 종류 · 소금을 뿌려 확인</div>
+    <label for="clam-preview" class="small-label">열한 종류 비교 · 테스트</label>
+    <select id="clam-preview" class="clam-preview"><option value="actual">현재 만난 맛조개</option><option value="0">꼬마</option><option value="1">호기심쟁이</option><option value="2">통통이</option><option value="3">긴장쟁이</option><option value="4">왕맛조개</option><option value="5">황금이</option><option value="6">빨간번개</option><option value="7">파도</option><option value="8">보라꿈</option><option value="9">청록이</option><option value="10">무지개</option></select>
+    <label for="pull-event-preview" class="small-label">당길 때 반응 비교 · 테스트</label>
+    <select id="pull-event-preview" class="clam-preview"><option value="actual">실제 개체의 랜덤 반응</option><option value="none">평범하게 버티기</option><option value="spray">물 뿌리기</option><option value="grimace">으아 싫어!!!</option><option value="mask">몸 끝 끊고 탈출</option></select>
+    <label for="difficulty">맛조개 난이도</label>
+    <select id="difficulty" style="width:100%;padding:10px;margin-bottom:12px;border:1px solid #bbc7b1;border-radius:7px;background:#f5f3ea;color:#344b42"><option value="practice">연습 · 느긋한 맛조개</option><option value="normal">보통 · 눈치 보는 맛조개</option><option value="challenge" selected>도전 · 약삭빠른 맛조개</option></select>
+    <button id="start-reaction" class="debug-reaction">반응 바로 보기 · 테스트</button>
+    <div class="hand-state" id="behavior-state" role="status">반응 대기</div>
+    <label for="reaction-distance">경계 거리 <output id="reaction-distance-value">9 cm</output></label>
+    <input id="reaction-distance" type="range" min="4" max="12" step="0.5" value="9">
+    <div class="hand-state" id="hand-state">몸통 중앙을 맞추고 초록색이 되면 잡기</div>
+    <p class="description" id="grab-message" role="status">노란 조준점을 중앙에 잠깐 유지한 뒤, 초록색이 되면 누르고 위로 당겨 주세요.</p>
+    <label>잡기 확인 <output id="grab-count">0</output></label>
+    <div class="hand-state" id="pull-result">채집 0 · 연속 0 · 놓침 0 · 도주 0</div>
+    <div class="pull-feel" id="pull-feel" role="status">잡은 뒤 위로 당기면 진흙의 저항이 느껴집니다.</div>
+    <label for="pull-resistance">저항 강도 <output id="pull-resistance-value">1.2</output></label>
+    <input id="pull-resistance" type="range" min="0.4" max="2" step="0.1" value="1.2">
+    <label class="check"><input type="checkbox" id="sound-enabled" checked> 현장 소리</label>
+    <label class="check"><input type="checkbox" id="camera-feedback" checked> 카메라 반응</label>
+    <label for="distance">카메라 거리 <output id="distance-value">85 cm</output></label>
+    <input id="distance" type="range" min="55" max="135" step="1" value="85">
+    <label for="angle">내려다보는 각도 <output id="angle-value">72°</output></label>
+    <input id="angle" type="range" min="30" max="72" step="1" value="72">
+    <div class="divider"></div>
+    <label>수동 노출 테스트 <output id="height-value">숨음</output></label>
+    <div class="segments" role="group" aria-label="맛조개 노출 단계">
+      <button data-height="-7" aria-pressed="true">숨음</button>
+      <button data-height="3" aria-pressed="false">살짝</button>
+      <button data-height="10" aria-pressed="false">올라옴</button>
+    </div>
+    <label for="height" class="small-label">높이 조절 · 0 cm는 구멍 입구</label>
+    <input id="height" type="range" min="-7" max="24" step="1" value="-7">
+    <label class="check"><input type="checkbox" id="scale"> 10 cm 기준자 표시</label>
+    <button id="reset" class="reset">기본 시점으로 돌아가기 <span>↺</span></button>
+  </aside>
+  <button id="return-search" type="button">다른 구멍 찾기 ↗</button>
+  <footer><div class="foot-mark">FIELD NOTE <span>017</span></div><div><strong>잠깐 드러난 갯벌의 기척을 놓치지 마세요.</strong><p>기포와 모래 빨림 관찰 → 닫히기 전에 선택 → 다가가 파기 · H 패널 · R 초기화</p></div></footer>
+  <div id="error" role="alert" hidden>3D 화면을 불러오지 못했습니다. Chrome 또는 Edge에서 다시 열어 주세요.<br><small id="error-detail"></small></div>
+</body>
+</html>
