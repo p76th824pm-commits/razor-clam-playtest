@@ -12,8 +12,10 @@
     const WALK_SPEED = 175;
     const DIG_DURATION = 260;
     const OCTOPUS_DIVE_DELAY = 1250;
-    const OCTOPUS_TRACE_TIME = 3200;
-    const OCTOPUS_DIG_DURATION = 460;
+    const OCTOPUS_TRACE_TIME = 5200;
+    const OCTOPUS_DIG_DURATION = 520;
+    const OCTOPUS_GRAB_TIME = 7600;
+    const OCTOPUS_PEEL_DISTANCE = 46;
     const overlay = document.createElement('section');
     overlay.id = 'burrow-search';
     overlay.setAttribute('aria-label', '갯벌 구멍 탐색');
@@ -77,6 +79,7 @@
     const keys = new Set();
     let walkTarget = null;
     let digging = null;
+    let octopusGrab = null;
     let lastTick = 0;
     let down = false;
     let pointerId = null;
@@ -228,7 +231,7 @@
     }
     function finishTide(tide){
       if(tideEnded)return;
-      tideEnded=true;keys.clear();walkTarget=null;digging=null;player.moving=false;transitioning=true;
+      tideEnded=true;keys.clear();walkTarget=null;digging=null;octopusGrab=null;player.moving=false;transitioning=true;
       const rescued=!active||!tide.safe;
       const before=basketItems.length;
       let lost=0,lostWeight=0;
@@ -252,7 +255,7 @@
       let closeupFlooded=false;
       if(tide.flood>0){
         const front=waterFront(tide,now);
-        octopuses.forEach(o=>{if(o.y+o.size*11>=front)o.flooded=true;});
+        octopuses.forEach(o=>{if(o.y+o.size*11>=front){o.flooded=true;if(octopusGrab?.octopus===o)octopusGrab=null;}});
         holes.forEach(h=>{
           if(h.flooded||h.y+12*h.size<front)return;
           h.flooded=true;h.reveal=0;h.signalAt=0;h.signalUntil=0;h.locked=false;h.crabAt=0;
@@ -401,12 +404,27 @@
       for(let attempt=0;attempt<target*70&&octopuses.length<target;attempt++){
         const x=rand(55,mapW-55),y=rand(SAFE_SHORE_Y+95,mapH-70);
         if(octopuses.some(o=>Math.hypot(o.x-x,o.y-y)<105))continue;
-        octopuses.push({id:octopuses.length,x,y,size:rand(.72,1.25),angle:rand(-Math.PI,Math.PI),weight:Math.round(rand(380,1250)),caught:false,flooded:false,spottedAt:0,burrowedAt:0,escaped:false});
+        octopuses.push({id:octopuses.length,x,y,size:rand(.72,1.25),angle:rand(-Math.PI,Math.PI),weight:Math.round(rand(380,1250)),caught:false,flooded:false,spottedAt:0,burrowedAt:0,escaped:false,traces:null,exposedAt:0,grabUntil:0,inkAt:0});
       }
       if(octopuses.length&&!octopuses.some(o=>Math.hypot(o.x-player.x,o.y-player.y)<260)){
         octopuses[0].x=clamp(player.x+110,55,mapW-55);
         octopuses[0].y=SAFE_SHORE_Y+140;
       }
+    }
+    function makeOctopusTraces(o){
+      const traces=[{x:o.x,y:o.y,real:true,dismissed:false}];
+      for(let i=0;i<2;i++){
+        const angle=o.angle+(i?1:-1)*rand(.72,1.25),distance=rand(42,68);
+        traces.push({x:clamp(o.x+Math.cos(angle)*distance,35,mapW-35),y:clamp(o.y+Math.sin(angle)*distance*.62,SAFE_SHORE_Y+35,mapH-35),real:false,dismissed:false});
+      }
+      for(let i=traces.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[traces[i],traces[j]]=[traces[j],traces[i]];}
+      o.traces=traces;
+    }
+    function octopusDirections(){
+      const pool=[{x:-1,y:0,label:'←'},{x:1,y:0,label:'→'},{x:0,y:-1,label:'↑'},{x:.72,y:-.70,label:'↗'},{x:-.72,y:-.70,label:'↖'},{x:.72,y:.70,label:'↘'},{x:-.72,y:.70,label:'↙'}];
+      const picks=[];
+      while(picks.length<3){const choice=pool[Math.floor(Math.random()*pool.length)];if(!picks.includes(choice))picks.push(choice);}
+      return picks;
     }
     function updateNight(now){
       if(!active||mode!=='night'||tideEnded)return;
@@ -417,13 +435,15 @@
           if(!walkTarget&&!digging)setStatus('낙지가 불빛을 느꼈어요! 숨기 전에 위치를 눌러 달려가세요.');
         }
         if(o.spottedAt&&!o.burrowedAt&&now-o.spottedAt>=OCTOPUS_DIVE_DELAY){
-          o.burrowedAt=now;
-          if(!walkTarget&&!digging)setStatus('낙지가 갯벌에 숨었어요. 남은 흔적으로 달려가 파세요!');
+          o.burrowedAt=now;makeOctopusTraces(o);
+          if(!walkTarget&&!digging)setStatus('낙지가 세 갈래 흔적을 남겼어요. 기포가 이어지는 진짜 도주로를 골라 파세요!');
         }
-        if(o.burrowedAt&&now-o.burrowedAt>=OCTOPUS_TRACE_TIME){
+        if(o.burrowedAt&&!o.exposedAt&&now-o.burrowedAt>=OCTOPUS_TRACE_TIME){
           o.escaped=true;
           if(!walkTarget&&!digging){setStatus('낙지의 흔적이 사라졌어요. 다른 곳을 비춰 보세요.');updateHud();}
         }
+        if(o.exposedAt&&!octopusGrab&&now>=o.grabUntil)failOctopusGrab(o,now,'머뭇거리는 사이 낙지가 먹물을 뿜고 빠져나갔어요.');
+        if(octopusGrab?.octopus===o&&now>=octopusGrab.until)failOctopusGrab(o,now,'빨판을 떼기 전에 낙지가 먹물을 뿜고 빠져나갔어요.');
       }
     }
     function fade(age) {
@@ -837,16 +857,59 @@
       const angle=lampDirection(),facing=dx*Math.cos(angle)+dy*Math.sin(angle);
       return distance<65||distance<300&&facing/distance>Math.cos(.55);
     }
+    function drawInkCloud(o,now){
+      if(!o.inkAt||now-o.inkAt>1150)return;
+      const age=now-o.inkAt,grow=clamp(age/420,0,1),fade=clamp((1150-age)/520,0,1);
+      ctx.save();ctx.translate(o.x,o.y);ctx.globalAlpha=.72*fade;ctx.fillStyle='#171426';
+      for(let i=0;i<9;i++){const a=i*2.399,r=(12+i*3.2)*grow;ctx.beginPath();ctx.arc(Math.cos(a)*r,Math.sin(a)*r*.58,10+6*grow,0,Math.PI*2);ctx.fill();}
+      ctx.restore();
+    }
+    function drawExposedOctopus(o,now){
+      const grab=octopusGrab?.octopus===o?octopusGrab:null;
+      const directions=o.peelDirections||[];
+      ctx.save();ctx.translate(o.x,o.y);ctx.scale(o.size,o.size);
+      ctx.lineCap='round';
+      directions.forEach((direction,index)=>{
+        const stage=grab?.stage??o.peelStage??0;
+        const released=index<stage,current=index===stage;
+        const reach=35+(index%2)*5,ax=direction.x*reach,ay=direction.y*reach;
+        ctx.strokeStyle=released?'#76c99a':current?'#ffd36b':'#5c435f';ctx.lineWidth=current?6:4;
+        ctx.beginPath();ctx.moveTo(direction.x*7,direction.y*7);ctx.quadraticCurveTo(ax*.55+Math.sin(now*.012+index)*4,ay*.55,ax,ay);ctx.stroke();
+        ctx.fillStyle=released?'#76c99a':current?'#fff0a6':'#b18a9f';ctx.beginPath();ctx.arc(ax,ay,current?6:4.5,0,Math.PI*2);ctx.fill();
+      });
+      ctx.fillStyle='#805e84';ctx.beginPath();ctx.ellipse(0,-4,16,19,0,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#cba5a4';ctx.beginPath();ctx.ellipse(-4,-11,6,4,-.4,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#f9e6c4';for(const x of [-5,5]){ctx.beginPath();ctx.arc(x,-1,3.2,0,Math.PI*2);ctx.fill();}
+      ctx.fillStyle='#2d3040';for(const x of [-5,5]){ctx.beginPath();ctx.arc(x,-1,1.4,0,Math.PI*2);ctx.fill();}
+      ctx.restore();
+      const direction=directions[grab?.stage??o.peelStage??0];
+      if(direction){
+        const seconds=Math.max(0,((grab?.until||o.grabUntil)-now)/1000);
+        ctx.save();ctx.textAlign='center';ctx.font='700 15px sans-serif';ctx.fillStyle='#fff4c8';ctx.strokeStyle='#172231';ctx.lineWidth=5;
+        const label=grab?`빨판 ${grab.stage}/3 · ${direction.label} 드래그 · ${seconds.toFixed(1)}초`:'몸통을 누른 채 화살표 방향으로 당기세요';
+        ctx.strokeText(label,o.x,o.y-65);ctx.fillText(label,o.x,o.y-65);
+        ctx.font='900 35px sans-serif';ctx.strokeText(direction.label,o.x+direction.x*52,o.y+direction.y*48);ctx.fillStyle='#ffd36b';ctx.fillText(direction.label,o.x+direction.x*52,o.y+direction.y*48);ctx.restore();
+      }
+    }
     function drawOctopus(o,now){
+      drawInkCloud(o,now);
       if(o.caught||o.flooded||o.escaped)return;
+      if(o.exposedAt){drawExposedOctopus(o,now);return;}
       if(o.burrowedAt){
         const left=clamp(1-(now-o.burrowedAt)/OCTOPUS_TRACE_TIME,0,1);
-        ctx.save();ctx.translate(o.x,o.y);
-        ctx.fillStyle='#523e4ca8';ctx.beginPath();ctx.ellipse(0,0,17*o.size,11*o.size,0,0,Math.PI*2);ctx.fill();
-        ctx.strokeStyle=`rgba(245,216,159,${.25+.65*left})`;ctx.lineWidth=2.5;
-        ctx.beginPath();ctx.arc(0,0,24*o.size,-Math.PI/2,-Math.PI/2+Math.PI*2*left);ctx.stroke();
-        ctx.fillStyle='#d9d2ba';for(let i=0;i<3;i++){ctx.beginPath();ctx.arc((i-1)*8,-10-Math.sin(now*.006+i)*3,1.6,0,Math.PI*2);ctx.fill();}
-        ctx.restore();return;
+        for(const trace of o.traces||[{x:o.x,y:o.y,real:true}]){
+          if(trace.dismissed)continue;
+          ctx.save();ctx.translate(trace.x,trace.y);
+          ctx.fillStyle='#523e4ca8';ctx.beginPath();ctx.ellipse(0,0,17*o.size,11*o.size,0,0,Math.PI*2);ctx.fill();
+          ctx.strokeStyle=`rgba(245,216,159,${.25+.65*left})`;ctx.lineWidth=2.5;
+          ctx.beginPath();ctx.arc(0,0,24*o.size,-Math.PI/2,-Math.PI/2+Math.PI*2*left);ctx.stroke();
+          ctx.fillStyle=trace.real?'#e7dcc0':'#afa58f';
+          const bubbles=trace.real?3:2;
+          for(let i=0;i<bubbles;i++){ctx.beginPath();ctx.arc((i-(bubbles-1)/2)*8,-10-Math.sin(now*.006+i)*3,(trace.real?1.8:1.25),0,Math.PI*2);ctx.fill();}
+          if(trace.real){ctx.strokeStyle=`rgba(196,173,132,${.28+.25*Math.sin(now*.01)})`;ctx.beginPath();ctx.moveTo(-18,8);ctx.quadraticCurveTo(-4,15,18,4);ctx.stroke();}
+          ctx.restore();
+        }
+        return;
       }
       const bob=Math.sin(now*.003+o.x)*2;
       const sink=o.spottedAt?clamp((now-o.spottedAt-OCTOPUS_DIVE_DELAY+420)/420,0,1):0;
@@ -948,7 +1011,7 @@
       const activeClues=holes.filter(h=>clueVisibility(h,performance.now())>.12).length;
       count.textContent = '확인 ' + strokes + '곳 · 놓친 기척 ' + clueClosures + ' · 주변 기척 ' + activeClues;
       const profile=fieldProfile(player.y),speed=Math.round(profile.speedFactor*100),chance=Math.round(profile.clamChance*100);
-      const text=profile.zone+' · '+profile.activity+' · 이동 '+speed+'% · 맛조개 '+chance+'%';
+      const text=profile.zone+' · '+profile.activity+' · 이동 '+speed+'% · '+(mode==='night'?'낙지 기척 탐색':'맛조개 '+chance+'%');
       if(zoneText.textContent!==text)zoneText.textContent=text;
     }
     function hit(x, y) {
@@ -962,7 +1025,49 @@
       return nearest;
     }
     function nightHit(x,y){
-      return octopuses.find(o=>!o.caught&&!o.flooded&&!o.escaped&&inLamp(o.x,o.y)&&Math.hypot(o.x-x,o.y-y)<27*o.size)||null;
+      for(const o of octopuses){
+        if(o.caught||o.flooded||o.escaped)continue;
+        if(o.exposedAt&&Math.hypot(o.x-x,o.y-y)<32*o.size)return {octopus:o,x:o.x,y:o.y,kind:'body',real:true};
+        if(o.burrowedAt){
+          const trace=(o.traces||[]).find(trace=>!trace.dismissed&&inLamp(trace.x,trace.y)&&Math.hypot(trace.x-x,trace.y-y)<28*o.size);
+          if(trace)return {octopus:o,x:trace.x,y:trace.y,kind:'trace',real:trace.real,trace};
+        }else if(inLamp(o.x,o.y)&&Math.hypot(o.x-x,o.y-y)<27*o.size)return {octopus:o,x:o.x,y:o.y,kind:'octopus',real:true};
+      }
+      return null;
+    }
+    function failOctopusGrab(o,now,message){
+      if(!o||o.caught||o.escaped)return;
+      o.inkAt=now;o.escaped=true;o.exposedAt=0;o.grabUntil=0;misses++;
+      if(octopusGrab?.octopus===o)octopusGrab=null;
+      down=false;pointerId=null;
+      setStatus(message);updateHud();
+    }
+    function catchOctopus(o,now){
+      o.caught=true;o.exposedAt=0;o.grabUntil=0;found++;basket++;basketWeight+=o.weight;
+      basketItems.push({kind:'octopus',name:'낙지',color:'#8b668f',length:.8,width:1.3,weight:o.weight});
+      basketDropAt=now;octopusGrab=null;down=false;pointerId=null;
+      setStatus('세 다리의 빨판을 모두 떼어 낙지를 잡았어요!');updateHud();
+    }
+    function beginOctopusGrab(target,sx,sy,now){
+      const o=target?.octopus;
+      if(!o?.exposedAt||o.caught||o.escaped||Math.hypot(o.x-player.x,o.y-player.y)>92)return false;
+      octopusGrab={octopus:o,stage:o.peelStage||0,until:Math.min(o.grabUntil,now+OCTOPUS_GRAB_TIME),startX:sx,startY:sy,wrong:0};
+      setStatus(`몸통을 잡았어요. ${o.peelDirections[octopusGrab.stage].label} 방향으로 당겨 빨판을 떼세요!`);
+      return true;
+    }
+    function updateOctopusGrab(sx,sy,now){
+      const grab=octopusGrab;if(!grab)return;
+      const direction=grab.octopus.peelDirections[grab.stage],dx=sx-grab.startX,dy=sy-grab.startY;
+      const along=dx*direction.x+dy*direction.y,cross=Math.abs(dx*direction.y-dy*direction.x),distance=Math.hypot(dx,dy);
+      if(along>=OCTOPUS_PEEL_DISTANCE&&cross<38){
+        grab.stage++;grab.octopus.peelStage=grab.stage;grab.startX=sx;grab.startY=sy;grab.wrong=Math.max(0,grab.wrong-.35);
+        if(grab.stage>=3){catchOctopus(grab.octopus,now);return;}
+        setStatus(`빨판 ${grab.stage}/3 분리! 손을 놓지 말고 ${grab.octopus.peelDirections[grab.stage].label} 방향으로 이어서 당기세요.`);
+      }else if(distance>62&&(along<12||cross>48)){
+        grab.wrong+=.36;grab.startX=sx;grab.startY=sy;
+        setStatus('반대쪽으로 당겨 빨판이 더 달라붙었어요! 화살표 방향을 따라가세요.');
+        if(grab.wrong>=1)failOctopusGrab(grab.octopus,now,'방향을 놓쳐 낙지가 먹물을 뿜고 손에서 빠져나갔어요.');
+      }
     }
     function beginNightDig(o,now){
       if(!o||o.caught||o.flooded||digging||transitioning)return;
@@ -974,15 +1079,23 @@
     function finishNightDig(o,now){
       strokes++;
       if(!o.escaped&&!o.flooded&&(!o.burrowedAt||now-o.burrowedAt<OCTOPUS_TRACE_TIME)){
-        o.caught=true;found++;basket++;basketWeight+=o.weight;
-        basketItems.push({kind:'octopus',name:'낙지',color:'#8b668f',length:.8,width:1.3,weight:o.weight});
-        basketDropAt=now;
-        setStatus('낙지를 파내 바구니에 담았어요! 다음 낙지를 찾아보세요.');
+        o.exposedAt=now;o.grabUntil=now+OCTOPUS_GRAB_TIME;o.peelDirections=octopusDirections();o.peelStage=0;
+        setStatus('낙지가 튀어나왔어요! 몸통을 누른 채 표시된 세 방향으로 빨판을 떼세요.');
       }else{
         o.escaped=true;misses++;
         setStatus('조금 늦었어요. 낙지가 깊이 숨어 빈자리만 남았어요.');
       }
       updateHud();
+    }
+    function resolveNightTarget(target,now){
+      if(!target)return;
+      const o=target.octopus;
+      if(target.kind==='body'){setStatus('낙지 몸통을 누른 채 화살표 방향으로 드래그하세요.');return;}
+      if(target.kind==='trace'&&!target.real){
+        target.trace.dismissed=true;strokes++;misses++;cuts.push({x1:target.x,y1:target.y,x2:target.x+8,y2:target.y+24,at:now});
+        setStatus('가짜 도주 흔적이었어요! 남은 기포 자국 중 진짜 길을 다시 골라 보세요.');updateHud();return;
+      }
+      beginNightDig(o,now);
     }
     function choose(x, y) {
       const now = performance.now();
@@ -1048,10 +1161,11 @@
       const x = sx + cameraX, y = sy + cameraY;
       if(Math.hypot(x-(player.x-player.face*34),y-(player.y-14))<21){toggleBasket();return;}
       if(mode==='night'){
-        const o=nightHit(x,y);
-        if(o){
-          if(Math.hypot(o.x-player.x,o.y-player.y)<=78)beginNightDig(o,performance.now());
-          else{walkTarget={x:clamp(o.x,20,mapW-20),y:clamp(o.y+55,PLAYER_TOP_Y,mapH-20),octopus:o};setStatus('낙지가 곧 숨습니다! 흔적이 사라지기 전에 달려가 파세요.');}
+        const target=nightHit(x,y);
+        if(target){
+          if(target.kind==='body'){setStatus('낙지 몸통을 누른 채 화살표 방향으로 드래그하세요.');}
+          else if(Math.hypot(target.x-player.x,target.y-player.y)<=78)resolveNightTarget(target,performance.now());
+          else{walkTarget={x:clamp(target.x,20,mapW-20),y:clamp(target.y+55,PLAYER_TOP_Y,mapH-20),nightTarget:target};setStatus(target.kind==='trace'?'선택한 도주 흔적으로 달려갑니다. 진짜 흔적인지 곧 확인돼요!':'낙지가 곧 숨습니다! 도주 흔적을 놓치지 마세요.');}
         }else{
           walkTarget={x:clamp(x,20,mapW-20),y:clamp(y,PLAYER_TOP_Y,mapH-20)};
           setStatus('헤드랜턴으로 갯벌을 비추며 낙지를 찾아보세요.');
@@ -1093,11 +1207,11 @@
         const distance = Math.hypot(dx, dy);
         if (distance <= 5) {
           const h = walkTarget.hole;
-          const o = walkTarget.octopus;
+          const nightTarget = walkTarget.nightTarget;
           walkTarget = null;
           player.moving = false;
           if (h) beginDig(h, now);
-          if(o)beginNightDig(o,now);
+          if(nightTarget)resolveNightTarget(nightTarget,now);
           return;
         }
         vx = dx / distance;
@@ -1106,7 +1220,7 @@
       const length = Math.hypot(vx, vy);
       player.moving = length > 0;
       if (length) {
-        const speed=WALK_SPEED*movementFactor(now)*(mode==='night'&&walkTarget?.octopus?1.28:1);
+        const speed=WALK_SPEED*movementFactor(now)*(mode==='night'&&walkTarget?.nightTarget?1.28:1);
         player.x = clamp(player.x + vx / length * speed * dt, 20, mapW - 20);
         player.y = clamp(player.y + vy / length * speed * dt, PLAYER_TOP_Y, mapH - 20);
         if (vx) player.face = vx > 0 ? 1 : -1;
@@ -1122,11 +1236,16 @@
       downY = hoverY = e.clientY;
       moved = 0;
       canvas.setPointerCapture(e.pointerId);
+      if(mode==='night'){
+        const target=nightHit(hoverX+cameraX,hoverY+cameraY);
+        if(target?.kind==='body')beginOctopusGrab(target,hoverX,hoverY,performance.now());
+      }
       e.preventDefault();
     });
     canvas.addEventListener('pointermove', e => {
       hoverX = e.clientX; hoverY = e.clientY;
       if (down && pointerId === e.pointerId) moved = Math.hypot(hoverX - downX, hoverY - downY);
+      if(down&&pointerId===e.pointerId&&octopusGrab)updateOctopusGrab(hoverX,hoverY,performance.now());
       canvas.style.cursor = (mode==='night'?nightHit(hoverX+cameraX,hoverY+cameraY):hit(hoverX + cameraX, hoverY + cameraY))||Math.hypot(hoverX+cameraX-(player.x-player.face*34),hoverY+cameraY-(player.y-14))<21 ? 'pointer' : 'crosshair';
       draw(performance.now());
     });
@@ -1134,9 +1253,12 @@
       if (!down || pointerId !== e.pointerId) return;
       down = false;
       pointerId = null;
-      if (moved < 12) fieldClick(downX, downY);
+      if(octopusGrab){
+        const o=octopusGrab.octopus;octopusGrab=null;
+        if(!o.caught&&!o.escaped)setStatus(`손을 놓쳤어요. 몸통을 다시 잡고 ${o.peelDirections[o.peelStage||0].label} 방향부터 이어가세요.`);
+      }else if (moved < 12) fieldClick(downX, downY);
     });
-    canvas.addEventListener('pointercancel', () => { down = false; pointerId = null; });
+    canvas.addEventListener('pointercancel', () => { down = false; pointerId = null; octopusGrab=null; });
     canvas.addEventListener('pointerleave', () => { if (!down) { hoverX = -100; draw(performance.now()); } });
     addEventListener('keydown', e => {
       if (!active || e.ctrlKey || e.altKey || e.metaKey || e.target.matches('input,button')) return;
@@ -1147,8 +1269,14 @@
       } else if (key === 'e' || key === ' ') {
         if (!e.repeat) {
           if(mode==='night'){
-            const o=octopuses.find(o=>!o.caught&&!o.flooded&&!o.escaped&&inLamp(o.x,o.y)&&Math.hypot(o.x-player.x,o.y-player.y)<78);
-            if(o)beginNightDig(o,performance.now());
+            const target=octopuses.flatMap(o=>{
+              if(o.caught||o.flooded||o.escaped)return [];
+              if(o.exposedAt)return [{octopus:o,x:o.x,y:o.y,kind:'body',real:true}];
+              if(o.burrowedAt)return (o.traces||[]).filter(t=>!t.dismissed&&inLamp(t.x,t.y)).map(t=>({octopus:o,x:t.x,y:t.y,kind:'trace',real:t.real,trace:t}));
+              return inLamp(o.x,o.y)?[{octopus:o,x:o.x,y:o.y,kind:'octopus',real:true}]:[];
+            }).find(target=>Math.hypot(target.x-player.x,target.y-player.y)<78);
+            if(target?.kind==='body')setStatus('몸통을 마우스로 누른 채 화살표 방향으로 드래그하세요.');
+            else if(target)resolveNightTarget(target,performance.now());
             else setStatus('불빛 속의 낙지 흔적 가까이에서 E를 눌러 파세요.');
           }else{
             const h = nearestHole();
@@ -1214,8 +1342,8 @@
       active = true;
       overlay.dataset.mode=mode;
       modeButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.mode===mode)));
-      searchTitle.textContent=mode==='night'?'헤드랜턴으로 낙지를 찾아요':'잠깐 나타나는 기척을 찾아봐요';
-      searchHint.innerHTML=mode==='night'?'헤드랜턴으로 발견 <span>·</span> 낙지/흔적 클릭: 달려가 파기 <span>·</span> 가까이서 E: 파기':'기척 클릭: 다가가 파기 <span>·</span> 빈 곳 클릭: 이동 <span>·</span> WASD / 방향키: 걷기';
+      searchTitle.textContent=mode==='night'?'도주 흔적을 읽고 빨판을 떼요':'잠깐 나타나는 기척을 찾아봐요';
+      searchHint.innerHTML=mode==='night'?'불빛으로 발견 <span>·</span> 세 흔적 중 진짜 길 선택 <span>·</span> 몸통 누른 채 화살표 드래그':'기척 클릭: 다가가 파기 <span>·</span> 빈 곳 클릭: 이동 <span>·</span> WASD / 방향키: 걷기';
       tideHud.querySelector('.tide-icon').textContent=mode==='night'?'☾':'◔';
       overlay.hidden = false;
       document.body.classList.add('searching');
@@ -1228,11 +1356,12 @@
       down = false;
       walkTarget = null;
       digging = null;
+      octopusGrab = null;
       keys.clear();
       lastTick = 0;
       hoverX = -100; hoverY = -100;
       if(!fresh)nextClueAt=Math.min(nextClueAt||Infinity,performance.now()+300);
-      setStatus(message || (mode==='night'?'헤드랜턴 불빛으로 낙지를 찾고 가까이서 잡아 보세요.':'기포와 빨려 드는 모래가 나타나면, 구멍이 닫히기 전에 눌러 보세요.'));
+      setStatus(message || (mode==='night'?'불빛으로 낙지를 몰고, 세 도주 흔적 중 진짜 길을 찾아 빨판을 떼세요.':'기포와 빨려 드는 모래가 나타나면, 구멍이 닫히기 전에 눌러 보세요.'));
       updateHud();
       draw(performance.now());
       if (!raf) raf = requestAnimationFrame(tick);
@@ -1245,6 +1374,7 @@
       if(walkTarget?.hole)walkTarget.hole.locked=false;
       walkTarget = null;
       digging = null;
+      octopusGrab = null;
     }
     modeButtons.forEach(button=>button.addEventListener('click',()=>{
       if(button.dataset.mode===mode)return;
@@ -1254,13 +1384,13 @@
     addEventListener('resize', resize);
     resize();
     return {start, close, getState: () => ({
-      active, mode, found, checked, strokes, misses, basket, basketWeight, basketItems:basketItems.map(item=>({...item})),octopuses:octopuses.length,remainingOctopuses:octopuses.filter(o=>!o.caught&&!o.flooded&&!o.escaped).length, player: {x: player.x, y: player.y}, camera: {x: cameraX, y: cameraY}, walking: !!walkTarget, digging: !!digging,
+      active, mode, found, checked, strokes, misses, basket, basketWeight, basketItems:basketItems.map(item=>({...item})),octopuses:octopuses.length,remainingOctopuses:octopuses.filter(o=>!o.caught&&!o.flooded&&!o.escaped).length, player: {x: player.x, y: player.y}, camera: {x: cameraX, y: cameraY}, walking: !!walkTarget, digging: !!digging,octopusGrab:octopusGrab?{id:octopusGrab.octopus.id,stage:octopusGrab.stage,wrong:octopusGrab.wrong}:null,
       tide:tideState(performance.now()),tideEnded,field:{...fieldProfile(player.y),movementFactor:movementFactor(performance.now()),localPressure:surveyPressure(player.x,player.y,performance.now())},
       revealed: holes.filter(h => visible(h, performance.now()) >= .34).length,
       clues:{active:holes.filter(h=>clueVisibility(h,performance.now())>.12).length,sightings:clueSightings,closed:clueClosures},
       holes: holes.length, clamHoles: holes.filter(h => h.kind === 'clam').length, floodedHoles:holes.filter(h=>h.flooded).length
     }), setTideElapsed:(ms)=>{tideElapsedOverride=clamp(ms,0,TIDE_END);lastTideHudAt=0;updateTide(performance.now());if(active&&!tideEnded)draw(performance.now());}, getDebugHoles: () => holes.map(h => ({
       id:h.id,x: h.x - cameraX, y: h.y - cameraY, worldX: h.x, worldY: h.y, kind: h.kind,clueStyle:{...h.clueStyle}, clamType: h.clamType, rarity:h.clamType===undefined?null:TYPE_RARITY[h.clamType],weightFactor: h.weightFactor, pullEvent: h.pullEvent,seaward:h.seaward,clamChance:h.clamChance,speedFactor:h.speedFactor,reveal: visible(h, performance.now()),clue:clueVisibility(h,performance.now()),signalAt:h.signalAt,signalUntil:h.signalUntil,locked:h.locked,checked:h.checked,flooded:h.flooded
-    })),getDebugOctopuses:()=>octopuses.map(o=>({id:o.id,x:o.x-cameraX,y:o.y-cameraY,worldX:o.x,worldY:o.y,spotted:!!o.spottedAt,burrowed:!!o.burrowedAt,escaped:o.escaped,caught:o.caught,flooded:o.flooded})),triggerClue};
+    })),getDebugOctopuses:()=>octopuses.map(o=>({id:o.id,x:o.x-cameraX,y:o.y-cameraY,worldX:o.x,worldY:o.y,spotted:!!o.spottedAt,burrowed:!!o.burrowedAt,exposed:!!o.exposedAt,escaped:o.escaped,caught:o.caught,flooded:o.flooded,peelStage:o.peelStage||0,peelDirections:(o.peelDirections||[]).map(d=>({...d})),traces:(o.traces||[]).map(t=>({x:t.x-cameraX,y:t.y-cameraY,worldX:t.x,worldY:t.y,real:t.real,dismissed:t.dismissed}))})),triggerClue};
   };
 })();
